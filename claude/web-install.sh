@@ -10,6 +10,13 @@ MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 echo "⬇️  正在下载 Claude 开机动画（约 50MB）…"
-curl -fL --progress-bar -o "$TMP/pkg.zip" "$URL"
-ditto -x -k "$TMP/pkg.zip" "$TMP/pkg"
-zsh "$TMP/pkg/ClaudeBootAnimation/install.sh"
+if curl -fL --progress-bar -o "$TMP/pkg.zip" "$URL"; then
+  ditto -x -k "$TMP/pkg.zip" "$TMP/pkg"
+  zsh "$TMP/pkg/ClaudeBootAnimation/install.sh"
+else
+  echo "ℹ️  未找到 Release 预编译包，改为拉取 claude/ 源码现场编译安装…"
+  command -v git >/dev/null || { echo "需要 git 或先在 GitHub Releases 上传 ClaudeBootAnimation.zip"; exit 1; }
+  git clone --depth 1 --filter=blob:none --sparse https://github.com/pine-chen/ai-boot-animations.git "$TMP/repo"
+  git -C "$TMP/repo" sparse-checkout set claude
+  zsh "$TMP/repo/claude/install.sh"
+fi
