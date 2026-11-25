@@ -6,6 +6,7 @@
 
 1. **进程拆分，空闲内存降至 ~8.1 MB**：将常驻监听进程（`ClaudeBootAnimation`，仅链接 `AppKit`）与播放进程（`ClaudeBootAnimationPlayer`）分离。Claude 退出后播放进程立即退出，100% 释放 `AVFoundation` / Metal / 视频解码缓存。
 2. **原生无缝循环，降低播放期内存**：移除原版 5000 段 `AVMutableComposition` 拼接，改用 `AVQueuePlayer` + `AVPlayerLooper`；开屏结束后立即释放 `introPlayer`、`AVPlayerItemVideoOutput` 和字幕窗口。
+3. **支持 macOS 版 Claude Code CLI**：在 Terminal、iTerm2、Warp、Ghostty、Kitty、Alacritty、WezTerm 等独立终端中运行 `claude` 时，自动识别宿主终端窗口并播放开机动画与循环背景；`claude` 退出后自动收起并释放内存（自动跳过 VS Code / Cursor 等 IDE 后台及子进程）。
 
 ---
 
