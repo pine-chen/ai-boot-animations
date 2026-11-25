@@ -124,8 +124,20 @@ func findHostTerminalPID(for cliPID: pid_t, in table: [pid_t: ProcEntry]) -> pid
 final class WatcherDelegate: NSObject, NSApplicationDelegate {
     private var worker: Process?
     private var lockFD: Int32 = -1
+    private var knownAllPids = Set<pid_t>()
     private var seenCLIPids = Set<pid_t>()
     private var cliTimer: Timer?
+
+    private func currentAllPids() -> Set<pid_t> {
+        let byteCount = proc_listallpids(nil, 0)
+        guard byteCount > 0 else { return [] }
+        let capacity = Int(byteCount) / MemoryLayout<pid_t>.stride + 64
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let actualBytes = proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.stride))
+        guard actualBytes > 0 else { return [] }
+        let count = Int(actualBytes) / MemoryLayout<pid_t>.stride
+        return Set(pids[0..<count].filter { $0 > 0 })
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let dir = configDir()
@@ -148,12 +160,9 @@ final class WatcherDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(appLaunched(_:)),
             name: NSWorkspace.didLaunchApplicationNotification, object: nil)
 
-        // 启动时已存在的 claude CLI 进程记入 seenCLIPids，不补播
-        let initialTable = snapshotProcesses()
-        for (pid, entry) in initialTable where isClaudeCLIProcessName(entry.name) {
-            seenCLIPids.insert(pid)
-        }
-        cliTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        // 启动时已存在的进程记入 knownAllPids，不补播
+        knownAllPids = currentAllPids()
+        cliTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
             self?.scanForNewClaudeCLI()
         }
 
@@ -171,20 +180,34 @@ final class WatcherDelegate: NSObject, NSApplicationDelegate {
 
     @objc func appLaunched(_ n: Notification) {
         guard let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == claudeBundleID else { return }
+              app.bundleIdentifier == claudeBundleID,
+              app.activationPolicy == .regular else { return }
         if worker?.isRunning != true {
             spawnWorker(args: ["--launch-pid", "\(app.processIdentifier)"])
         }
     }
 
     private func scanForNewClaudeCLI() {
-        let table = snapshotProcesses()
-        // 清理已退出的 PID
-        seenCLIPids = seenCLIPids.filter {
-            guard let e = table[$0] else { return false }
-            return isClaudeCLIProcessName(e.name)
+        let nowPids = currentAllPids()
+        let newPids = nowPids.subtracting(knownAllPids)
+        knownAllPids = nowPids
+        seenCLIPids.formIntersection(nowPids)
+        guard !newPids.isEmpty else { return }
+
+        var nameBuf = [CChar](repeating: 0, count: 256)
+        var candidates: [pid_t] = []
+        for pid in newPids {
+            let len = proc_name(pid, &nameBuf, 256)
+            guard len > 0 else { continue }
+            let name = String(cString: nameBuf)
+            if isClaudeCLIProcessName(name) && !seenCLIPids.contains(pid) {
+                candidates.append(pid)
+            }
         }
-        for (pid, entry) in table where isClaudeCLIProcessName(entry.name) && !seenCLIPids.contains(pid) {
+        guard !candidates.isEmpty else { return }
+
+        let table = snapshotProcesses()
+        for pid in candidates {
             seenCLIPids.insert(pid)
             guard let termPID = findHostTerminalPID(for: pid, in: table) else { continue }
             if worker?.isRunning == true {

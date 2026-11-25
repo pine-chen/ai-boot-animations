@@ -1031,18 +1031,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func appLaunched(_ n: Notification) {
         guard let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == claudeBundleID else { return }
+              app.bundleIdentifier == claudeBundleID,
+              app.activationPolicy == .regular else { return }
         startForLaunchedPID(app.processIdentifier)
     }
 
     func startForLaunchedPID(_ pid: pid_t) {
+        if activeCLIPID == pid { return }
         syncIcon()
         config = Config.load()
         log("检测到 Claude 启动 pid=\(pid)，开屏=\(config.playIntro) 循环背景=\(config.loopBackground)")
         guard config.playIntro || config.loopBackground else { return }
         show?.teardown()
         let withIntro = config.playIntro
-        // 趁等 Claude 主窗口出现的几百毫秒提前加载并预卷开屏视频，减少首帧延迟
+        // 趁等 Claude 主窗口出现的几百毫秒提前异步加载开屏视频（不能在 status == .unknown 时调 preroll，否则会抛异常）
         var preloaded: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)?
         if withIntro {
             let iAsset = AVURLAsset(url: introURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
@@ -1050,7 +1052,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let vOut = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
             iItem.add(vOut)
             let iPlayer = AVPlayer(playerItem: iItem)
-            iPlayer.preroll(atRate: 1.0)
             preloaded = (iPlayer, iItem, vOut)
         }
         // 等主窗口出现，最多 30 秒
