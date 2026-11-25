@@ -15,11 +15,15 @@ APP=build/ClaudeBootAnimation.app
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # 同时编出 Apple 芯片和 Intel 两份，再合成一个通用程序
 TMPB=$(mktemp -d)
+CACHE_DIR="${TMPDIR:-/tmp}/swift-module-cache"
 for ARCH in arm64 x86_64; do
-  swiftc -O -target $ARCH-apple-macos13 -o "$TMPB/$ARCH" Sources/main.swift \
+  swiftc -O -module-cache-path "$CACHE_DIR" -target $ARCH-apple-macos13 -o "$TMPB/watcher-$ARCH" Sources/watcher.swift \
+    -framework AppKit 2> >(grep -v -E 'deprecated|^\s*(\||`|[0-9]+ \|)' >&2)
+  swiftc -O -module-cache-path "$CACHE_DIR" -target $ARCH-apple-macos13 -o "$TMPB/player-$ARCH" Sources/main.swift \
     -framework AppKit -framework AVFoundation 2> >(grep -v -E 'deprecated|^\s*(\||`|[0-9]+ \|)' >&2)
 done
-lipo -create "$TMPB/arm64" "$TMPB/x86_64" -output "$APP/Contents/MacOS/ClaudeBootAnimation"
+lipo -create "$TMPB/watcher-arm64" "$TMPB/watcher-x86_64" -output "$APP/Contents/MacOS/ClaudeBootAnimation"
+lipo -create "$TMPB/player-arm64" "$TMPB/player-x86_64" -output "$APP/Contents/MacOS/ClaudeBootAnimationPlayer"
 rm -rf "$TMPB"
 if [[ -n "$AUDIO" ]]; then
   command -v ffmpeg >/dev/null || { echo "配音轨需要 ffmpeg：brew install ffmpeg"; exit 1; }
@@ -42,5 +46,5 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP" 2>/dev/null
+codesign --force --sign - "$APP" 2>/dev/null || true
 echo "打包完成：$APP"

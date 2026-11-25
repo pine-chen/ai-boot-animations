@@ -1,4 +1,4 @@
-build/
 .DS_Store
-claude/windows/build/
-claude/windows/assets/*.mp4
+claude/build/
+codex/build/
+antigravity/build/

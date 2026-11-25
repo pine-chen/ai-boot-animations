@@ -1,4 +1,13 @@
-# AI Boot Animations · AI 应用开机动画
+# AI Boot Animations · AI 应用开机动画（内存优化版 Fork）
+
+> 本仓库基于原作者 [wynneceles/ai-boot-animations](https://github.com/wynneceles/ai-boot-animations) 进行源码修改（遵循 GPL-3.0 开源协议，保留原作者署名；动画素材未作任何修改，遵循原素材 CC BY-NC-ND 4.0 协议）。
+
+### 本版优化内容（macOS Claude 版）
+
+1. **进程拆分，空闲内存降至 ~8.1 MB**：将常驻监听进程（`ClaudeBootAnimation`，仅链接 `AppKit`）与播放进程（`ClaudeBootAnimationPlayer`）分离。Claude 退出后播放进程立即退出，100% 释放 `AVFoundation` / Metal / 视频解码缓存。
+2. **原生无缝循环，降低播放期内存**：移除原版 5000 段 `AVMutableComposition` 拼接，改用 `AVQueuePlayer` + `AVPlayerLooper`；开屏结束后立即释放 `introPlayer`、`AVPlayerItemVideoOutput` 和字幕窗口。
+
+---
 
 给 Mac 和 Windows 上的 AI 桌面应用加开机动画：打开应用时先放一段开屏，再透出真正的界面，留下一层半透明的动态背景。每个动画都是独立的小程序，**不修改应用本体**，随时一键卸载。
 
@@ -23,18 +32,18 @@
 需要 macOS 13 或更新（Apple 芯片和 Intel 都行）。打开「终端」，粘贴这一行，回车：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wynneceles/ai-boot-animations/main/claude/web-install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/pine-chen/ai-boot-animations/main/claude/web-install.sh | zsh
 ```
 
-几秒钟就装好，菜单栏右边（电池左边）出现 ✨，并弹出设置窗口。不需要装 Xcode。
+几秒钟就装好，菜单栏右边（电池左边）出现 ✨，并弹出设置窗口。不需要装 Xcode。（注：一行安装需仓库 Releases 已发布 `ClaudeBootAnimation.zip`；若尚未发布 Release，请使用下方源码编译安装。）
 
-<details>
-<summary>想自己从源码编译？</summary>
+<details open>
+<summary>从源码编译安装（推荐）</summary>
 
 需要 Xcode 命令行工具（没有的话先运行 `xcode-select --install`）：
 
 ```bash
-git clone https://github.com/wynneceles/ai-boot-animations.git
+git clone https://github.com/pine-chen/ai-boot-animations.git
 cd ai-boot-animations/claude
 ./install.sh
 ```
