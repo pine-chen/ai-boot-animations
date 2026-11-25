@@ -306,6 +306,7 @@ final class Show {
     var lastFrame = NSRect.zero
     var sysAnim = false          // 窗口在做系统动画（最小化、还原、缩放、分屏）时浮层先藏起来
     var stableSince = Date()
+    let startedAt = Date()
 
     init(pid: pid_t, watchedPID: pid_t? = nil, pinnedWindowNumber: Int? = nil,
          target: TargetWindow, config: Config, withIntro: Bool,
@@ -458,7 +459,7 @@ final class Show {
         // 最小化的神灯效果会把窗口拧成漏斗形，矩形视频怎么跟都对不上，干脆先藏起来；
         // 用户自己拖动、拉伸窗口时鼠标是按着的，照常跟随
         let mouseDown = NSEvent.pressedMouseButtons & 1 != 0
-        if t.cocoaFrame != lastFrame {
+        if t.cocoaFrame != lastFrame && Date().timeIntervalSince(startedAt) > 0.8 {
             if !mouseDown && !sysAnim && overlay.isVisible { log("窗口在做系统动画，浮层先藏起来"); sysAnim = true }
             if sysAnim { stableSince = Date(); lastFrame = t.cocoaFrame }
         }
@@ -1057,7 +1058,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 等主窗口出现，最多 30 秒
         let deadline = Date().addingTimeInterval(30)
         waiting?.invalidate()
-        waiting = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+        waiting = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
             let terminated = NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true
             if let t = findClaudeWindow(pid: pid) {
