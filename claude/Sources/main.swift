@@ -13,12 +13,6 @@ import CoreImage
 let claudeBundleID = "com.anthropic.claudefordesktop"
 let showSettingsNote = Notification.Name("io.github.celestewynne0506-pixel.claude-boot-animation.show-settings")
 let showWorkerSettingsNote = Notification.Name("io.github.celestewynne0506-pixel.claude-boot-animation.worker-show-settings")
-let launchCLINote = Notification.Name("io.github.celestewynne0506-pixel.claude-boot-animation.launch-cli")
-
-func isProcessAlive(_ pid: pid_t) -> Bool {
-    guard pid > 0 else { return false }
-    return kill(pid, 0) == 0 || errno == EPERM
-}
 
 // MARK: - 配置
 
@@ -110,7 +104,7 @@ func log(_ msg: String) {
 
 struct TargetWindow { let number: Int; let cocoaFrame: NSRect; let coveredByOtherApp: Bool }
 
-func findClaudeWindow(pid: pid_t, preferredWindow: Int? = nil, preferFrontmost: Bool = false) -> TargetWindow? {
+func findClaudeWindow(pid: pid_t) -> TargetWindow? {
     guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                 kCGNullWindowID) as? [[String: Any]] else { return nil }
     var best: (Int, CGRect)?
@@ -122,14 +116,6 @@ func findClaudeWindow(pid: pid_t, preferredWindow: Int? = nil, preferFrontmost: 
         if let a = w[kCGWindowAlpha as String] as? Double, a <= 0 { continue }
         let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
         if r.width < 300 || r.height < 200 { continue }
-        if let pw = preferredWindow {
-            if num == pw { best = (num, r); break }
-            continue
-        }
-        if preferFrontmost {
-            best = (num, r)
-            break
-        }
         if best == nil || r.width * r.height > best!.1.width * best!.1.height { best = (num, r) }
     }
     guard let (num, r) = best, let primary = NSScreen.screens.first else { return nil }
@@ -274,8 +260,6 @@ final class Show {
     enum Phase { case intro, revealed, ending, done }
 
     let pid: pid_t
-    let watchedPID: pid_t
-    let pinnedWindowNumber: Int?
     var config: Config
     let withIntro: Bool
     let onDone: () -> Void
@@ -308,12 +292,11 @@ final class Show {
     var stableSince = Date()
     let startedAt = Date()
 
-    init(pid: pid_t, watchedPID: pid_t? = nil, pinnedWindowNumber: Int? = nil,
-         target: TargetWindow, config: Config, withIntro: Bool,
+    init(pid: pid_t, target: TargetWindow, config: Config, withIntro: Bool,
          introURL: URL, loopURL: URL,
          preloadedIntro: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)? = nil,
          onDone: @escaping () -> Void) {
-        self.pid = pid; self.watchedPID = watchedPID ?? pid; self.pinnedWindowNumber = pinnedWindowNumber
+        self.pid = pid
         self.config = config; self.withIntro = withIntro; self.loopURL = loopURL; self.onDone = onDone
 
         overlay = makeBorderlessWindow(target.cocoaFrame)
@@ -445,11 +428,7 @@ final class Show {
     /// 跟着 Claude 窗口移动/缩放，并保持正好压在它上面（不会盖到别的 App 的窗口）
     func follow() {
         guard phase != .done else { return }
-        if !isProcessAlive(watchedPID) {
-            finish(fast: true)
-            return
-        }
-        guard let t = findClaudeWindow(pid: pid, preferredWindow: pinnedWindowNumber) else {
+        guard let t = findClaudeWindow(pid: pid) else {
             if overlay.isVisible { overlay.orderOut(nil) }
             sysAnim = true; stableSince = Date()   // 再出现时多半是从 Dock 还原的动画，等停稳再露面
             if NSRunningApplication(processIdentifier: pid) == nil { finish(fast: true) }
@@ -764,27 +743,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var show: Show?
     var waiting: Timer?
     var settings: SettingsWindow?
-    var activeCLIPID: pid_t?
-    var activeTerminalPID: pid_t?
-    var cliExitSource: DispatchSourceProcess?
     var targetRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).isEmpty }
-    var hasActiveCLI: Bool {
-        if let p = activeCLIPID, isProcessAlive(p) { return true }
-        return false
-    }
     func releaseIfIdle() {
         guard show == nil, waiting == nil || waiting?.isValid == false else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { malloc_zone_pressure_relief(nil, 0) }
     }
     func exitIfIdle() {
-        guard !targetRunning, !hasActiveCLI, show == nil, waiting == nil || waiting?.isValid == false,
+        guard !targetRunning, show == nil, waiting == nil || waiting?.isValid == false,
               settings?.window?.isVisible != true else { return }
         log("Claude 未运行且无活动窗口，播放进程退出以释放内存")
         exit(0)
     }
-    /// 菜单栏图标只在目标应用或 Claude Code CLI 开着时出现
+    /// 菜单栏图标只在目标应用开着时出现
     func syncIcon() {
-        let v = targetRunning || hasActiveCLI || show != nil
+        let v = targetRunning || show != nil
         guard let si = statusItem, si.isVisible != v else { return }
         log("菜单栏图标 → \(v ? "显示" : "隐藏")")
         // macOS 在图标隐藏时会把记住的位置删掉，再显示就被排到最左边（刘海后面）。
@@ -835,11 +807,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DistributedNotificationCenter.default().addObserver(forName: showWorkerSettingsNote, object: nil, queue: .main) { [weak self] _ in
             self?.openSettings()
         }
-        DistributedNotificationCenter.default().addObserver(forName: launchCLINote, object: nil, queue: .main) { [weak self] n in
-            guard let cli = n.userInfo?["cliPid"] as? Int,
-                  let term = n.userInfo?["terminalPid"] as? Int else { return }
-            self?.startForCLI(cliPID: pid_t(cli), terminalPID: pid_t(term))
-        }
         setupMenu()
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(appLaunched(_:)),
@@ -852,11 +819,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let i = CommandLine.arguments.firstIndex(of: "--launch-pid"), i + 1 < CommandLine.arguments.count,
            let pid = Int32(CommandLine.arguments[i + 1]) {
             startForLaunchedPID(pid)
-        } else if let ci = CommandLine.arguments.firstIndex(of: "--launch-cli-pid"), ci + 1 < CommandLine.arguments.count,
-                  let ti = CommandLine.arguments.firstIndex(of: "--terminal-pid"), ti + 1 < CommandLine.arguments.count,
-                  let cliPID = Int32(CommandLine.arguments[ci + 1]),
-                  let termPID = Int32(CommandLine.arguments[ti + 1]) {
-            startForCLI(cliPID: cliPID, terminalPID: termPID)
         }
         if CommandLine.arguments.contains("--settings") { openSettings() }
         if CommandLine.arguments.contains("--show-menu") {   // 测试/截图用：自动弹出菜单
@@ -981,53 +943,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @discardableResult
     func startOnCurrentWindow(withIntro: Bool, exitWhenDone: Bool) -> Bool {
-        guard show == nil else { return false }
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).first,
-           let t = findClaudeWindow(pid: app.processIdentifier) {
-            start(pid: app.processIdentifier, target: t, withIntro: withIntro, exitWhenDone: exitWhenDone)
-            return true
-        }
-        if let cli = activeCLIPID, isProcessAlive(cli),
-           let term = activeTerminalPID,
-           let t = findClaudeWindow(pid: term, preferFrontmost: true) {
-            start(pid: term, watchedPID: cli, pinnedWindowNumber: t.number, target: t, withIntro: withIntro, exitWhenDone: exitWhenDone)
-            return true
-        }
-        return false
-    }
-
-    func startForCLI(cliPID: pid_t, terminalPID: pid_t) {
-        activeCLIPID = cliPID
-        activeTerminalPID = terminalPID
-        cliExitSource?.cancel()
-        let src = DispatchSource.makeProcessSource(identifier: cliPID, eventMask: .exit, queue: .main)
-        src.setEventHandler { [weak self] in
-            guard let self else { return }
-            if self.activeCLIPID == cliPID {
-                self.activeCLIPID = nil
-                self.activeTerminalPID = nil
-            }
-            self.cliExitSource = nil
-            self.waiting?.invalidate()
-            self.show?.finish(fast: true)
-            self.syncIcon()
-            self.exitIfIdle()
-        }
-        src.resume()
-        cliExitSource = src
-
-        syncIcon()
-        config = Config.load()
-        log("检测到 Claude Code CLI 启动 cliPid=\(cliPID) terminalPid=\(terminalPID)，开屏=\(config.playIntro) 循环背景=\(config.loopBackground)")
-        guard config.playIntro || config.loopBackground else { return }
-        show?.teardown()
-        let withIntro = config.playIntro
-        if let t = findClaudeWindow(pid: terminalPID, preferFrontmost: true) {
-            start(pid: terminalPID, watchedPID: cliPID, pinnedWindowNumber: t.number, target: t, withIntro: withIntro, exitWhenDone: false)
-        } else {
-            log("未找到宿主终端窗口，放弃这次")
-            exitIfIdle()
-        }
+        guard show == nil,
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).first,
+              let t = findClaudeWindow(pid: app.processIdentifier) else { return false }
+        start(pid: app.processIdentifier, target: t, withIntro: withIntro, exitWhenDone: exitWhenDone)
+        return true
     }
 
     @objc func appLaunched(_ n: Notification) {
@@ -1038,7 +958,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func startForLaunchedPID(_ pid: pid_t) {
-        if activeCLIPID == pid { return }
         syncIcon()
         config = Config.load()
         log("检测到 Claude 启动 pid=\(pid)，开屏=\(config.playIntro) 循环背景=\(config.loopBackground)")
@@ -1081,14 +1000,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func start(pid: pid_t, watchedPID: pid_t? = nil, pinnedWindowNumber: Int? = nil,
-               target: TargetWindow, withIntro: Bool,
+    func start(pid: pid_t, target: TargetWindow, withIntro: Bool,
                preloadedIntro: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)? = nil,
                exitWhenDone: Bool) {
         var s: Show!
         let t0 = Date()
-        s = Show(pid: pid, watchedPID: watchedPID, pinnedWindowNumber: pinnedWindowNumber,
-                 target: target, config: config, withIntro: withIntro,
+        s = Show(pid: pid, target: target, config: config, withIntro: withIntro,
                  introURL: introURL, loopURL: loopURL,
                  preloadedIntro: preloadedIntro) { [weak self] in
             if self?.show === s { self?.show = nil }
