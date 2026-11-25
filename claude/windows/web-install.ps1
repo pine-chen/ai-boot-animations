@@ -1,11 +1,11 @@
 # One-line install (Windows 10/11):
-#   irm https://raw.githubusercontent.com/wynneceles/ai-boot-animations/main/claude/windows/web-install.ps1 | iex
+#   irm https://raw.githubusercontent.com/pine-chen/ai-boot-animations/main/claude/windows/web-install.ps1 | iex
 # Installs to the non-system drive with the most free space (e.g. D:\AIBootAnimations), C: only as a fallback.
 # Pick a folder yourself:  $env:CBA_DIR = 'E:\Apps'; irm ... | iex
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$url = 'https://github.com/wynneceles/ai-boot-animations/releases/latest/download/ClaudeBootAnimation-Windows.zip'
+$url = 'https://github.com/pine-chen/ai-boot-animations/releases/latest/download/ClaudeBootAnimation-Windows.zip'
 if ($env:CBA_ZIP_URL) { $url = $env:CBA_ZIP_URL }
 function Test-Writable([string]$p) {
   try { New-Item -ItemType Directory -Force -Path $p | Out-Null; $f = Join-Path $p ('.w' + [guid]::NewGuid().ToString('N')); [IO.File]::WriteAllText($f, ''); Remove-Item $f -Force; return $true } catch { return $false }

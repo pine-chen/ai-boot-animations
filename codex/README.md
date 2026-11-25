@@ -24,15 +24,15 @@
 **一行命令安装（推荐）**：打开「终端」，粘贴这一行，回车：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wynneceles/ai-boot-animations/main/codex/web-install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/pine-chen/ai-boot-animations/main/codex/web-install.sh | zsh
 ```
 
-会从本仓库的 [Releases](https://github.com/wynneceles/ai-boot-animations/releases) 下载编好的程序（约 53MB）并装好，不需要装 Xcode。
+会从本仓库的 [Releases](https://github.com/pine-chen/ai-boot-animations/releases) 下载编好的程序（约 53MB）并装好，不需要装 Xcode。
 
 **从源码编译安装**：需要 Xcode 命令行工具（没有的话先运行 `xcode-select --install`）：
 
 ```bash
-git clone https://github.com/wynneceles/ai-boot-animations.git
+git clone https://github.com/pine-chen/ai-boot-animations.git
 cd ai-boot-animations/codex
 ./install.sh
 ```
@@ -46,10 +46,10 @@ cd ai-boot-animations/codex
 需要 **Windows 10 / 11**。打开「PowerShell」（开始菜单搜索 PowerShell），粘贴这一行，回车：
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/wynneceles/ai-boot-animations/main/codex/windows/web-install.ps1 | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/pine-chen/ai-boot-animations/main/codex/windows/web-install.ps1 | iex
 ```
 
-打不开 raw.githubusercontent.com 的话，把网址换成 `https://cdn.jsdelivr.net/gh/wynneceles/ai-boot-animations@main/codex/windows/web-install.ps1`。
+打不开 raw.githubusercontent.com 的话，把网址换成 `https://cdn.jsdelivr.net/gh/pine-chen/ai-boot-animations@main/codex/windows/web-install.ps1`。
 
 会下载约 49MB，用 Windows 自带的编译器现场编译（不用装任何 SDK），装到**剩余空间最大的非系统盘**（例如 `D:\AIBootAnimations\GPTBootAnimation`，只有 C 盘时才装 C 盘；想自己指定位置，先运行 `$env:GBA_DIR='E:\某个文件夹'` 再粘贴安装命令），右下角托盘出现月亮图标并弹出设置窗口。和 Claude 版可以同时装。卸载：托盘月亮图标右键 →「卸载 GPT 开机动画…」。
 
