@@ -286,8 +286,10 @@ final class Show {
     var subWin: NSWindow?
     var subView: SubtitleView?
     let playerView: PlayerView
+    let loopURL: URL
     let loopPlayer = AVQueuePlayer()
     var looper: AVPlayerLooper?
+    var loopPrepared = false
     var introPlayer: AVPlayer?
     var introItem: AVPlayerItem?
     var videoOut: AVPlayerItemVideoOutput?
@@ -307,9 +309,11 @@ final class Show {
 
     init(pid: pid_t, watchedPID: pid_t? = nil, pinnedWindowNumber: Int? = nil,
          target: TargetWindow, config: Config, withIntro: Bool,
-         introURL: URL, loopURL: URL, onDone: @escaping () -> Void) {
+         introURL: URL, loopURL: URL,
+         preloadedIntro: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)? = nil,
+         onDone: @escaping () -> Void) {
         self.pid = pid; self.watchedPID = watchedPID ?? pid; self.pinnedWindowNumber = pinnedWindowNumber
-        self.config = config; self.withIntro = withIntro; self.onDone = onDone
+        self.config = config; self.withIntro = withIntro; self.loopURL = loopURL; self.onDone = onDone
 
         overlay = makeBorderlessWindow(target.cocoaFrame)
         playerView = PlayerView(frame: NSRect(origin: .zero, size: target.cocoaFrame.size))
@@ -321,19 +325,20 @@ final class Show {
         skipWin.contentView = btn
         btn.onClick = { [weak self] in self?.skipIntro() }
 
-        // 使用系统原生 AVPlayerLooper 无缝循环单文件，不再在内存里拼接数千段 AVMutableComposition
-        let loopTemplate = AVPlayerItem(asset: AVURLAsset(url: loopURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]))
-        loopPlayer.volume = 0
-        looper = AVPlayerLooper(player: loopPlayer, templateItem: loopTemplate)
-        playerView.loopLayer.player = loopPlayer
-
         let shownAt = Date()
         if withIntro {
-            let iAsset = AVURLAsset(url: introURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-            let iItem = AVPlayerItem(asset: iAsset)
-            let vOut = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-            iItem.add(vOut)   // 点「跳过」时用来截当前这一帧做淡出；开屏结束后立即释放
-            let iPlayer = AVPlayer(playerItem: iItem)
+            let iPlayer: AVPlayer
+            let iItem: AVPlayerItem
+            let vOut: AVPlayerItemVideoOutput
+            if let pre = preloadedIntro {
+                (iPlayer, iItem, vOut) = pre
+            } else {
+                let iAsset = AVURLAsset(url: introURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+                iItem = AVPlayerItem(asset: iAsset)
+                vOut = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+                iItem.add(vOut)   // 点「跳过」时用来截当前这一帧做淡出；开屏结束后立即释放
+                iPlayer = AVPlayer(playerItem: iItem)
+            }
             iPlayer.volume = Float(config.introVolume)
             iPlayer.actionAtItemEnd = .pause
             introItem = iItem
@@ -358,6 +363,7 @@ final class Show {
             let fadeAt = CMTime(seconds: config.fadeStartSeconds, preferredTimescale: 600)
             timeObserver = iPlayer.addBoundaryTimeObserver(forTimes: [NSValue(time: fadeAt)], queue: .main) { [weak self] in
                 self?.reveal()
+                self?.ensureLoopPrepared()
                 self?.loopPlayer.preroll(atRate: 1.0)
             }
             if config.showSubtitles && !config.subtitles.isEmpty {
@@ -369,7 +375,13 @@ final class Show {
                 forName: .AVPlayerItemDidPlayToEndTime, object: iItem, queue: .main) { [weak self] _ in
                 self?.switchToLoopAfterIntro()
             }
+            // 等开屏首帧稳定播放后再在后台准备循环播放器，避免抢占首帧硬解初始化
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self, self.phase == .intro || self.phase == .revealed else { return }
+                self.ensureLoopPrepared()
+            }
         } else {
+            ensureLoopPrepared()
             readyObs = playerView.loopLayer.observe(\.isReadyForDisplay) { l, _ in
                 if l.isReadyForDisplay { DispatchQueue.main.async { log("第一帧出画面，用时 \(Int(Date().timeIntervalSince(shownAt) * 1000))ms") } }
             }
@@ -476,10 +488,21 @@ final class Show {
         if t.number != lastTarget { lastTarget = t.number; log("跟随窗口 \(t.number)") }
     }
 
+    func ensureLoopPrepared() {
+        guard !loopPrepared else { return }
+        loopPrepared = true
+        let loopTemplate = AVPlayerItem(asset: AVURLAsset(url: loopURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]))
+        loopPlayer.volume = 0
+        looper = AVPlayerLooper(player: loopPlayer, templateItem: loopTemplate)
+        playerView.loopLayer.player = loopPlayer
+    }
+
     /// 开屏播放完毕：启动底层循环播放器并释放开屏播放器、像素输出和字幕窗口
     func switchToLoopAfterIntro() {
         guard phase != .done else { return }
+        ensureLoopPrepared()
         inLoopAudio = true
+        ensureLoopPrepared()
         loopPlayer.play()
         releaseIntroResources()
         releaseSubtitlesWindow()
@@ -523,6 +546,7 @@ final class Show {
             playerView.layer!.addSublayer(snap)
         }
         inLoopAudio = true
+        ensureLoopPrepared()
         loopPlayer.play()
         releaseIntroResources()
         DispatchQueue.main.async {
@@ -1018,6 +1042,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard config.playIntro || config.loopBackground else { return }
         show?.teardown()
         let withIntro = config.playIntro
+        // 趁等 Claude 主窗口出现的几百毫秒提前加载并预卷开屏视频，减少首帧延迟
+        var preloaded: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)?
+        if withIntro {
+            let iAsset = AVURLAsset(url: introURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+            let iItem = AVPlayerItem(asset: iAsset)
+            let vOut = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            iItem.add(vOut)
+            let iPlayer = AVPlayer(playerItem: iItem)
+            iPlayer.preroll(atRate: 1.0)
+            preloaded = (iPlayer, iItem, vOut)
+        }
         // 等主窗口出现，最多 30 秒
         let deadline = Date().addingTimeInterval(30)
         waiting?.invalidate()
@@ -1025,7 +1060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { timer.invalidate(); return }
             let terminated = NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true
             if let t = findClaudeWindow(pid: pid) {
-                timer.invalidate(); self.start(pid: pid, target: t, withIntro: withIntro, exitWhenDone: false)
+                timer.invalidate(); self.start(pid: pid, target: t, withIntro: withIntro, preloadedIntro: preloaded, exitWhenDone: false)
             } else if Date() > deadline || terminated {
                 timer.invalidate(); self.releaseIfIdle(); log("等不到 Claude 主窗口，放弃这次"); self.exitIfIdle()
             }
@@ -1045,12 +1080,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func start(pid: pid_t, watchedPID: pid_t? = nil, pinnedWindowNumber: Int? = nil,
-               target: TargetWindow, withIntro: Bool, exitWhenDone: Bool) {
+               target: TargetWindow, withIntro: Bool,
+               preloadedIntro: (AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput)? = nil,
+               exitWhenDone: Bool) {
         var s: Show!
         let t0 = Date()
         s = Show(pid: pid, watchedPID: watchedPID, pinnedWindowNumber: pinnedWindowNumber,
                  target: target, config: config, withIntro: withIntro,
-                 introURL: introURL, loopURL: loopURL) { [weak self] in
+                 introURL: introURL, loopURL: loopURL,
+                 preloadedIntro: preloadedIntro) { [weak self] in
             if self?.show === s { self?.show = nil }
             self?.refreshMenu(); self?.syncIcon(); self?.releaseIfIdle()
             if exitWhenDone { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { exit(0) } }

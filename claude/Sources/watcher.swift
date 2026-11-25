@@ -17,6 +17,7 @@ let launchCLINote = Notification.Name("io.github.celestewynne0506-pixel.claude-b
 
 let terminalBundleIDs: Set<String> = [
     "com.apple.Terminal",
+    "com.muxy.app",
     "com.googlecode.iterm2",
     "dev.warp.Warp-Stable",
     "com.mitchellh.ghostty",
@@ -29,9 +30,14 @@ let terminalBundleIDs: Set<String> = [
 ]
 
 let ignoredAncestorNames: Set<String> = [
-    "claude", "Claude", "Code", "Code Helper", "Cursor", "Cursor Helper",
+    "claude", "claude.exe", "Claude", "Code", "Code Helper", "Cursor", "Cursor Helper",
     "Windsurf", "Antigravity", "Zed", "Electron"
 ]
+
+func isClaudeCLIProcessName(_ name: String) -> Bool {
+    let lower = name.lowercased()
+    return lower == "claude" || lower == "claude.exe"
+}
 
 let playerForwardedFlags: Set<String> = [
     "--preview", "--loop-only", "--wait-cache", "--render-subtitle", "--show-menu"
@@ -144,7 +150,7 @@ final class WatcherDelegate: NSObject, NSApplicationDelegate {
 
         // 启动时已存在的 claude CLI 进程记入 seenCLIPids，不补播
         let initialTable = snapshotProcesses()
-        for (pid, entry) in initialTable where entry.name == "claude" {
+        for (pid, entry) in initialTable where isClaudeCLIProcessName(entry.name) {
             seenCLIPids.insert(pid)
         }
         cliTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -174,8 +180,11 @@ final class WatcherDelegate: NSObject, NSApplicationDelegate {
     private func scanForNewClaudeCLI() {
         let table = snapshotProcesses()
         // 清理已退出的 PID
-        seenCLIPids = seenCLIPids.filter { table[$0]?.name == "claude" }
-        for (pid, entry) in table where entry.name == "claude" && !seenCLIPids.contains(pid) {
+        seenCLIPids = seenCLIPids.filter {
+            guard let e = table[$0] else { return false }
+            return isClaudeCLIProcessName(e.name)
+        }
+        for (pid, entry) in table where isClaudeCLIProcessName(entry.name) && !seenCLIPids.contains(pid) {
             seenCLIPids.insert(pid)
             guard let termPID = findHostTerminalPID(for: pid, in: table) else { continue }
             if worker?.isRunning == true {
